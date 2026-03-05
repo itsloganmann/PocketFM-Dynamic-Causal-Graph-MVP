@@ -6,29 +6,99 @@ world state, and structured event frames as defined in the
 Dynamic Causal Character Graphs paper.
 """
 
-from typing import Dict, List, Optional
+from __future__ import annotations
 
+import math
+import copy
+from typing import Dict, List, Optional, Any, Set
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    """Clamp a scalar to [lo, hi]."""
+    return max(lo, min(hi, float(value)))
+
+
+def _validate_unit(value: float, name: str) -> float:
+    """Validate and clamp a value to [0, 1]."""
+    v = float(value)
+    if not math.isfinite(v):
+        raise ValueError(f"{name} must be finite, got {v}")
+    return _clamp(v, 0.0, 1.0)
+
+
+def _validate_signed_unit(value: float, name: str) -> float:
+    """Validate and clamp a value to [-1, 1]."""
+    v = float(value)
+    if not math.isfinite(v):
+        raise ValueError(f"{name} must be finite, got {v}")
+    return _clamp(v, -1.0, 1.0)
+
+# ===================================================================
+# TraitState
+# ===================================================================
 
 class TraitState:
     """
     Represents stable personality traits.
+    
+    τ_j ∈ [-1, 1] or [0, 1].
+    These nodes have low plasticity and evolve slowly over time.
+    Ex: bravery, honesty, curiosity, risk-aversion.
 
     Attributes
     ----------
-    traits : Dict[str, float]
-        Mapping of trait name to intensity in [-1, 1] or [0, 1].
+    traits : dict[str, float]
+        Mapping of trait name → intensity (clamped to [-1, 1]).
     plasticity : float
-        Governs how slowly traits evolve. Low values resist change.
+        Base plasticity α ∈ [0, 1] — should be small for traits.
     """
 
     def __init__(self, traits: Dict[str, float], plasticity: float = 0.05):
-        self.traits: Dict[str, float] = traits
-        self.plasticity: float = plasticity
+        if not isinstance(traits, dict):
+            raise TypeError("traits must be a dict")
+        # Store each trait clamped to [-1, 1]
+        self.traits: Dict[str, float] = {
+            str(k): _validate_signed_unit(v, f"trait '{k}'")
+            for k, v in traits.items()
+        }
+        self.plasticity: float = _validate_unit(plasticity, "plasticity")
 
+    # -- accessors ---------------------------------------------------------
+
+    def get(self, name: str, default: float = 0.0) -> float:
+        """Return trait intensity, or *default* if the trait is absent."""
+        return self.traits.get(name, default)
+
+    def set_trait(self, name: str, value: float) -> None:
+        """Set a single trait (clamped)."""
+        self.traits[str(name)] = _validate_signed_unit(value, f"trait '{name}'")
+
+    # -- serialization -----------------------------------------------------
+
+    def to_dict(self) -> dict:
+        return {"traits": dict(self.traits), "plasticity": self.plasticity}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TraitState":
+        return cls(traits=d["traits"], plasticity=d.get("plasticity", 0.05))
+
+    def __repr__(self) -> str:
+        return f"TraitState(traits={self.traits}, α={self.plasticity})"
+
+# ===================================================================
+# EmotionState
+# ===================================================================
 
 class EmotionState:
     """
-    Represents the emotional state of a character.
+    Low-dimensional affective state.
+    --------------
+    e_t = (v_t, a_t)  where v = valence, a = arousal.
+    Discrete emotional tags (fear, anger, joy …) are intensity
+    values in [0, 1].  Emotions are FAST nodes (large α).
 
     Attributes
     ----------
@@ -45,38 +115,111 @@ class EmotionState:
     def __init__(
         self,
         valence: float = 0.0,
-        arousal: float = 0.5,
+        arousal: float = 0.0,
         emotion_tags: Optional[Dict[str, float]] = None,
         plasticity: float = 0.8,
     ):
-        self.valence: float = valence
-        self.arousal: float = arousal
-        self.emotion_tags: Dict[str, float] = emotion_tags if emotion_tags is not None else {}
-        self.plasticity: float = plasticity
+        self.valence: float = _validate_signed_unit(valence, "valence")
+        self.arousal: float = _validate_unit(arousal, "arousal")
+        self.emotion_tags: Dict[str, float] = {}
+        if emotion_tags:
+            for k, v in emotion_tags.items():
+                self.emotion_tags[str(k)] = _validate_unit(v, f"emotion_tag '{k}'")
+        self.plasticity: float = _validate_unit(plasticity, "plasticity")
 
+    # -- convenience -------------------------------------------------------
+
+    def dominant_emotion(self) -> Optional[str]:
+        """Return the tag with highest intensity, or None."""
+        if not self.emotion_tags:
+            return None
+        return max(self.emotion_tags, key=self.emotion_tags.get)
+
+    def set_tag(self, tag: str, intensity: float) -> None:
+        self.emotion_tags[str(tag)] = _validate_unit(intensity, f"emotion_tag '{tag}'")
+
+    # -- serialization -----------------------------------------------------
+
+    def to_dict(self) -> dict:
+        return {
+            "valence": self.valence,
+            "arousal": self.arousal,
+            "emotion_tags": dict(self.emotion_tags),
+            "plasticity": self.plasticity,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "EmotionState":
+        return cls(
+            valence=d.get("valence", 0.0),
+            arousal=d.get("arousal", 0.0),
+            emotion_tags=d.get("emotion_tags"),
+            plasticity=d.get("plasticity", 0.8),
+        )
+
+    def __repr__(self) -> str:
+        dom = self.dominant_emotion()
+        return (
+            f"EmotionState(v={self.valence:.2f}, a={self.arousal:.2f}, "
+            f"dominant={dom}, α={self.plasticity})"
+        )
+
+# ===================================================================
+# RelationshipState
+# ===================================================================
 
 class RelationshipState:
     """
     Represents relationship values with another entity.
 
-    All values are in [0, 1].
+    --------------
+    R_t(x) = (trust, affection, respect) ∈ [0, 1]³.
+    Semi-stable nodes — moderate plasticity.
 
     Attributes
     ----------
-    trust : float
-    affection : float
-    respect : float
+    entity_id : str       who this relationship is with
+    trust     : float     ∈ [0, 1]
+    affection : float     ∈ [0, 1]
+    respect   : float     ∈ [0, 1]
+    plasticity: float     ∈ [0, 1]
     """
 
-    def __init__(
+def __init__(
         self,
+        entity_id: str = "",
         trust: float = 0.5,
         affection: float = 0.5,
         respect: float = 0.5,
+        plasticity: float = 0.3,
     ):
-        self.trust: float = trust
-        self.affection: float = affection
-        self.respect: float = respect
+        self.entity_id: str = str(entity_id)
+        self.trust: float = _validate_unit(trust, "trust")
+        self.affection: float = _validate_unit(affection, "affection")
+        self.respect: float = _validate_unit(respect, "respect")
+        self.plasticity: float = _validate_unit(plasticity, "plasticity")
+
+    # -- serialization -----------------------------------------------------
+
+    def to_dict(self) -> dict:
+        return {
+            "entity_id": self.entity_id,
+            "trust": self.trust,
+            "affection": self.affection,
+            "respect": self.respect,
+            "plasticity": self.plasticity,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RelationshipState":
+        return cls(**d)
+
+    def __repr__(self) -> str:
+        return (
+            f"RelationshipState(entity={self.entity_id!r}, "
+            f"trust={self.trust:.2f}, aff={self.affection:.2f}, "
+            f"resp={self.respect:.2f}, α={self.plasticity})"
+        )
 
 
 class BeliefNode:
