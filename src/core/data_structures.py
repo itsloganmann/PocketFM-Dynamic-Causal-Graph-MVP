@@ -343,6 +343,7 @@ class CharacterState:
     timeline_index      : int                     T_t ∈ ℤ
     knowledge_boundary  : int                     max accessible time index
     world_constraints   : list[str]               hard narrative rules
+    causal_links        : list[dict]              causal dependencies between beliefs
     """
 
     def __init__(
@@ -356,6 +357,7 @@ class CharacterState:
         timeline_index: int = 0,
         knowledge_boundary: int = 0,
         world_constraints: Optional[List[str]] = None,
+        causal_links: Optional[List[Dict[str, Any]]] = None,
     ):
         self.character_id: str = str(character_id)
         self.traits: TraitState = traits or TraitState(traits={})
@@ -366,6 +368,7 @@ class CharacterState:
         self.timeline_index: int = int(timeline_index)
         self.knowledge_boundary: int = int(knowledge_boundary)
         self.world_constraints: List[str] = list(world_constraints or [])
+        self.causal_links: List[Dict[str, Any]] = list(causal_links or [])
 
     # -- belief helpers ----------------------------------------------------
 
@@ -379,6 +382,14 @@ class CharacterState:
     def high_confidence_beliefs(self, threshold: float = 0.7) -> List[BeliefNode]:
         """Return beliefs with probability above *threshold*."""
         return [b for b in self.beliefs.values() if b.probability >= threshold]
+    
+    def add_causal_link(self, antecedent: str, consequent: str, weight: float = 1.0) -> None:
+        """Add a causal dependency: change in antecedent propagates to consequent."""
+        self.causal_links.append({
+            "antecedent": antecedent,
+            "consequent": consequent,
+            "weight": float(weight)
+        })
 
     # -- relationship helpers ----------------------------------------------
 
@@ -434,6 +445,7 @@ class CharacterState:
             "timeline_index": self.timeline_index,
             "knowledge_boundary": self.knowledge_boundary,
             "world_constraints": list(self.world_constraints),
+            "causal_links": list(self.causal_links),
         }
 
     @classmethod
@@ -453,6 +465,7 @@ class CharacterState:
             timeline_index=d.get("timeline_index", 0),
             knowledge_boundary=d.get("knowledge_boundary", 0),
             world_constraints=d.get("world_constraints", []),
+            causal_links=d.get("causal_links", []),
         )
 
     def __repr__(self) -> str:
@@ -461,7 +474,8 @@ class CharacterState:
             f"traits={len(self.traits.traits)}, "
             f"beliefs={len(self.beliefs)}, "
             f"rels={len(self.relationships)}, "
-            f"t={self.timeline_index})"
+            f"t={self.timeline_index}, "
+            f"links={len(self.causal_links)})"
         )
 
 

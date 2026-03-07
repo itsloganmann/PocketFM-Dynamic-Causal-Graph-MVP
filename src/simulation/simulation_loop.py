@@ -6,6 +6,7 @@ Connects all modules:
     message
     -> event extraction
     -> belief update
+    -> causal propagation
     -> state propagation
     -> dialogue generation
 """
@@ -17,6 +18,7 @@ from extraction.event_extraction import extract_event, validate_event
 from generation.dialogue_generation import produce_dialogue
 from reasoning.belief_update import apply_belief_updates
 from reasoning.state_update import propagate_state_updates
+from reasoning.causal_propagation import propagate_causal_effects
 
 
 def simulation_turn(
@@ -32,9 +34,10 @@ def simulation_turn(
     Steps:
     1. Extract and validate a structured event frame from the message.
     2. Apply belief updates to the character state.
-    3. Propagate downstream state changes (emotions, relationships,
+    3. Propagate causal effects (internal reasoning).
+    4. Propagate downstream state changes (emotions, relationships,
        intentions).
-    4. Generate and return the character's dialogue response.
+    5. Generate and return the character's dialogue response.
 
     Preconditions
     -------------
@@ -47,8 +50,9 @@ def simulation_turn(
     1. Extract event
     2. Validate event
     3. Update beliefs
-    4. Propagate state changes
-    5. Generate response
+    4. Propagate causal effects
+    5. Propagate state changes
+    6. Generate response
 
     Postconditions
     --------------
@@ -74,12 +78,18 @@ def simulation_turn(
     event = validate_event(event, user_message)
 
     if event.confidence > 0.0:
+        # 1. Direct evidence update
         apply_belief_updates(
             character_state,
             event,
             lambda_base=lambda_base,
             narrative_importance=narrative_importance,
         )
+        
+        # 2. Causal inference (internal reasoning)
+        propagate_causal_effects(character_state)
+        
+        # 3. Emotional/Social state update
         propagate_state_updates(character_state, event)
 
     world_state.timeline_index = character_state.timeline_index
@@ -136,6 +146,9 @@ def run_simulation(
 
         if user_input.lower() in {"quit", "exit"}:
             break
+        
+        if not user_input:
+            continue
 
         response = simulation_turn(user_input, character_state, world_state)
         print(f"Character: {response}\n")

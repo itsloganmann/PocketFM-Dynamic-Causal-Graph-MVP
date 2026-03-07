@@ -14,7 +14,7 @@ state for convenience.
 
 import math
 
-from core.data_structures import CharacterState, EventFrame
+from core.data_structures import CharacterState, EventFrame, RelationshipState
 
 _EMOTION_TONE_MAP = {
     "joy": ("valence", +0.3),
@@ -43,6 +43,10 @@ def update_emotional_state(state: CharacterState, event: EventFrame) -> Characte
 
     Applies a plasticity-weighted shift to valence and arousal. Discrete
     emotion tag intensities are updated additively and clamped to [0, 1].
+    
+    Incorporates TraitState:
+    - neuroticism: Amplifies all emotional shifts.
+    - stoicism: Dampens all emotional shifts.
 
     Preconditions
     -------------
@@ -56,7 +60,7 @@ def update_emotional_state(state: CharacterState, event: EventFrame) -> Characte
     1. Read emotional tone (τt) from the event frame
     2. Adjust valence and arousal accordingly
     3. Update emotion tags to reflect detected emotions
-    4. Apply emotional plasticity to smooth updates
+    4. Apply emotional plasticity modulated by traits
 
     Postconditions
     --------------
@@ -77,21 +81,28 @@ def update_emotional_state(state: CharacterState, event: EventFrame) -> Characte
         return state
 
     tone_lower = tone.strip().lower()
-    alpha = state.emotions.plasticity
+    
+    # Calculate effective plasticity based on traits
+    base_alpha = state.emotions.plasticity
+    neuroticism = state.traits.get("neuroticism", 0.0)
+    stoicism = state.traits.get("stoicism", 0.0)
+    
+    # Neuroticism increases volatility; Stoicism reduces it.
+    effective_alpha = _clamp(base_alpha * (1.0 + neuroticism - stoicism), 0.1, 1.0)
 
     if tone_lower in _EMOTION_TONE_MAP:
         dimension, delta = _EMOTION_TONE_MAP[tone_lower]
         if dimension == "valence":
             state.emotions.valence = _clamp(
-                state.emotions.valence + alpha * delta, -1.0, 1.0
+                state.emotions.valence + effective_alpha * delta, -1.0, 1.0
             )
         else:
             state.emotions.arousal = _clamp(
-                state.emotions.arousal + alpha * delta, 0.0, 1.0
+                state.emotions.arousal + effective_alpha * delta, 0.0, 1.0
             )
 
     prev = state.emotions.emotion_tags.get(tone_lower, 0.0)
-    state.emotions.emotion_tags[tone_lower] = _clamp(prev + alpha * 0.3, 0.0, 1.0)
+    state.emotions.emotion_tags[tone_lower] = _clamp(prev + effective_alpha * 0.3, 0.0, 1.0)
 
     return state
 
@@ -100,8 +111,13 @@ def update_relationship_state(state: CharacterState, event: EventFrame) -> Chara
     """
     Update relationship values between the character and event entities.
 
-    Trust shifts are driven by the event's emotional tone. Only entities
-    that already have a relationship entry are updated.
+    Trust shifts are driven by the event's emotional tone.
+    Dynamically creates new relationships for unknown entities.
+    
+    Incorporates TraitState:
+    - trusting: Increases initial trust and positive updates.
+    - suspicious: Decreases initial trust and amplifies negative updates.
+    - agreeableness: Amplifies positive affection shifts.
 
     Preconditions
     -------------
@@ -111,7 +127,7 @@ def update_relationship_state(state: CharacterState, event: EventFrame) -> Chara
     Procedure
     ---------
     1. Identify interacting entities from event.entities
-    2. Locate relationship nodes in state.relationships
+    2. Locate or create relationship nodes in state.relationships
     3. Adjust trust, affection, or respect based on event tone
     4. Apply relationship decay or reinforcement
 
@@ -131,11 +147,44 @@ def update_relationship_state(state: CharacterState, event: EventFrame) -> Chara
     """
     tone = (event.emotional_tone or "").strip().lower()
     delta_trust = _TRUST_TONE_MAP.get(tone, 0.0)
+    
+    # Trait modifiers
+    trusting = state.traits.get("trusting", 0.0)
+    suspicious = state.traits.get("suspicious", 0.0)
+    agreeableness = state.traits.get("agreeableness", 0.0)
 
     for entity in event.entities:
+        # Skip self-reference
+        if entity == state.character_id:
+            continue
+            
         rel = state.relationships.get(entity)
-        if rel is not None:
-            rel.trust = _clamp(rel.trust + delta_trust * event.confidence, 0.0, 1.0)
+        
+        # Dynamic discovery: Create new relationship if it doesn't exist
+        if rel is None:
+            initial_trust = 0.5 + (0.2 * trusting) - (0.2 * suspicious)
+            rel = RelationshipState(
+                entity_id=entity,
+                trust=_clamp(initial_trust, 0.0, 1.0),
+                affection=0.5 + (0.1 * agreeableness),
+                respect=0.5
+            )
+            state.add_relationship(rel)
+
+        # Apply update
+        # If delta is positive, 'trusting' boosts it. If negative, 'suspicious' boosts it (makes it worse).
+        if delta_trust > 0:
+            modified_delta = delta_trust * (1.0 + trusting)
+        else:
+            modified_delta = delta_trust * (1.0 + suspicious)
+            
+        rel.trust = _clamp(rel.trust + modified_delta * event.confidence, 0.0, 1.0)
+        
+        # Simple affection update based on tone (simplified)
+        if tone in ["joy", "trust", "love"]:
+            rel.affection = _clamp(rel.affection + 0.05 * (1.0 + agreeableness), 0.0, 1.0)
+        elif tone in ["anger", "disgust", "hate"]:
+            rel.affection = _clamp(rel.affection - 0.05, 0.0, 1.0)
 
     return state
 
@@ -176,15 +225,19 @@ def update_intentions(state: CharacterState) -> CharacterState:
 
     for key, belief in state.beliefs.items():
         prob = 1.0 / (1.0 + math.exp(-belief.log_odds))
-        if prob > 0.75:
-            intentions.append(f"assert_{key}")
-        elif prob < 0.25:
-            intentions.append(f"deny_{key}")
+        if prob > 0.85:
+            intentions.append(f"maintain_{key}")
+        elif prob < 0.15:
+            intentions.append(f"avoid_{key}")
 
     if state.emotions.arousal > 0.7:
-        intentions.append("respond_urgently")
+        if state.emotions.valence < 0:
+            intentions.append("retreat_safety")
+        else:
+            intentions.append("act_boldly")
 
-    state.intentions = intentions
+    # Limit to top 3 intentions to avoid clutter
+    state.intentions = intentions[:3]
     return state
 
 

@@ -11,22 +11,33 @@ in tests and offline demos.
 """
 
 import re
-from core.data_structures import EventFrame
+import json
+import logging
+from typing import Optional, List, Dict, Any
 
+from core.data_structures import EventFrame
+from core import llm_client
+
+logger = logging.getLogger(__name__)
+
+# Fallback tone map used if LLM fails
+_TONE_MAP = {
+    "joy": ["happy", "good", "great", "joy", "wonderful", "excellent", "thanks", "thank"],
+    "anger": ["angry", "mad", "hate", "furious", "annoyed", "stop"],
+    "sadness": ["sad", "bad", "unfortunate", "sorry", "regret", "pity"],
+    "fear": ["scared", "fear", "afraid", "terrified", "worry", "worried"],
+    "trust": ["trust", "believe", "agree", "sure", "certain"],
+    "disgust": ["gross", "disgust", "hate", "eww"],
+    "surprise": ["wow", "really", "unexpected", "surprise"],
+    "anticipation": ["hope", "expect", "wait", "looking forward"]
+}
 
 def extract_event(user_message: str) -> EventFrame:
     """
     Convert raw dialogue into a structured event frame.
 
-    In production: sends user_message to a schema-constrained LLM
-    extraction prompt and parses the structured JSON response.
-
-    This implementation provides a rule-based fallback:
-    - Splits message into clauses by punctuation.
-    - Normalises propositions into snake_case.
-    - Handles basic negation (not, never, ~).
-    - Extracts capitalized words as potential entities.
-    - Infers emotional tone from keywords.
+    Attempts to use the configured LLM client. Falls back to a rule-based
+    heuristic if the LLM is unavailable or fails.
 
     Preconditions
     -------------
@@ -34,11 +45,9 @@ def extract_event(user_message: str) -> EventFrame:
 
     Procedure
     ---------
-    1. Pre-process text and split into clauses.
-    2. For each clause, extract proposition and handle negation.
-    3. Extract entities using regex.
-    4. Map keywords to emotional tone labels.
-    5. Construct and return EventFrame.
+    1. Check for configured LLM client.
+    2. If available, prompt for structured extraction.
+    3. If unavailable/fails, use regex/heuristic fallback.
 
     Postconditions
     --------------
@@ -52,6 +61,70 @@ def extract_event(user_message: str) -> EventFrame:
     -------
     EventFrame
     """
+    # Attempt LLM extraction first
+    if llm_client.configure_client():
+        try:
+            return _extract_event_llm(user_message)
+        except Exception as e:
+            logger.warning(f"LLM extraction failed: {e}. Falling back to rules.")
+    
+    # Fallback to rule-based extraction
+    return _extract_event_rules(user_message)
+
+
+def _extract_event_llm(user_message: str) -> EventFrame:
+    """Helper for LLM-based extraction."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "propositions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of factual assertions in snake_case (e.g. 'door_is_locked', 'not_safe'). Use 'not_' prefix for negation."
+            },
+            "entities": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of proper nouns or entities mentioned."
+            },
+            "emotional_tone": {
+                "type": "string",
+                "enum": ["joy", "anger", "sadness", "fear", "trust", "disgust", "surprise", "anticipation", "neutral"],
+                "description": "Dominant emotional tone of the speaker."
+            },
+            "confidence": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "description": "Confidence in the extraction (0.0 to 1.0)."
+            }
+        },
+        "required": ["propositions", "entities", "emotional_tone", "confidence"]
+    }
+
+    prompt = (
+        f"Analyze the following dialogue line from a user in a roleplay scenario.\n"
+        f"Extract factual propositions (snake_case), mentioned entities, and emotional tone.\n"
+        f"User Message: \"{user_message}\"\n"
+    )
+
+    result = llm_client.generate_structured(prompt, schema)
+    
+    if not result:
+        raise ValueError("LLM returned empty result")
+
+    return EventFrame(
+        propositions=result.get("propositions", []),
+        entities=result.get("entities", []),
+        speaker="user",
+        emotional_tone=result.get("emotional_tone", "neutral"),
+        confidence=float(result.get("confidence", 0.5)),
+        source_text=user_message
+    )
+
+
+def _extract_event_rules(user_message: str) -> EventFrame:
+    """Original rule-based fallback logic."""
     # 1. Basic cleaning and splitting
     message = user_message.strip()
     clauses = re.split(r'[.!?;,]', message)
@@ -60,7 +133,6 @@ def extract_event(user_message: str) -> EventFrame:
     propositions = []
     for clause in clauses:
         # 2. Normalize and handle negation
-        # "The door is not locked" -> "not_door_is_locked"
         words = clause.lower().split()
         is_negated = any(neg in words for neg in ["not", "never", "no", "neither", "nor"]) or "~" in clause
         
@@ -74,26 +146,13 @@ def extract_event(user_message: str) -> EventFrame:
             else:
                 propositions.append(prop)
 
-    # 3. Entity extraction (Capitalized words, excluding start of sentence if not Proper Noun)
-    # Simple heuristic: any word starting with Capital letter that isn't the first word, 
-    # OR first word if it looks like a name.
+    # 3. Entity extraction
     entities = list(set(re.findall(r'\b[A-Z][a-z]+\b', message)))
 
     # 4. Tone detection
-    tone_map = {
-        "joy": ["happy", "good", "great", "joy", "wonderful", "excellent", "thanks", "thank"],
-        "anger": ["angry", "mad", "hate", "furious", "annoyed", "stop"],
-        "sadness": ["sad", "bad", "unfortunate", "sorry", "regret", "pity"],
-        "fear": ["scared", "fear", "afraid", "terrified", "worry", "worried"],
-        "trust": ["trust", "believe", "agree", "sure", "certain"],
-        "disgust": ["gross", "disgust", "hate", "eww"],
-        "surprise": ["wow", "really", "unexpected", "surprise"],
-        "anticipation": ["hope", "expect", "wait", "looking forward"]
-    }
-    
     detected_tone = "neutral"
     message_lower = message.lower()
-    for tone, keywords in tone_map.items():
+    for tone, keywords in _TONE_MAP.items():
         if any(word in message_lower for word in keywords):
             detected_tone = tone
             break
