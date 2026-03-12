@@ -16,13 +16,14 @@ Mechanism:
 """
 
 import math
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from core.data_structures import CharacterState, BeliefNode
 from reasoning.belief_update import resolve_belief_conflicts
 
 def propagate_causal_effects(
     state: CharacterState,
+    prev_log_odds: Optional[Dict[str, float]] = None,
     propagation_rate: float = 0.1
 ) -> None:
     """
@@ -38,10 +39,11 @@ def propagate_causal_effects(
 
     Procedure
     ---------
-    1. For each link (antecedent, consequent, weight):
-       a. Retrieve L(antecedent)
-       b. Calculate influence: w * tanh(L(A)/2)
-       c. Update L(consequent) += rate * influence
+    1. For each belief that has children in the causal graph:
+       a. Compute Δ = current log_odds - previous log_odds
+       b. For each child link with weight w:
+          child.log_odds += propagation_rate * w * Δ
+    2. Resolve any belief conflicts after all updates.
 
     Postconditions
     --------------
@@ -55,43 +57,49 @@ def propagate_causal_effects(
     """
     if not state.causal_links:
         return
-
-    # Accumulate updates first to ensure synchronous update (order-independent)
+    if prev_log_odds is None:
+        return
     updates: Dict[str, float] = {}
 
-    for link in state.causal_links:
-        ant_name = link["antecedent"]
-        cons_name = link["consequent"]
-        weight = link.get("weight", 1.0)
-
-        ant_node = state.get_belief(ant_name)
-        if not ant_node:
+    # Iterate over all beliefs that might have changed
+    for prop, node in state.beliefs.items():
+        prev_val = prev_log_odds.get(prop)
+        if prev_val is None:
             continue
-        
-        # Calculate belief strength in [-1, 1]
-        # tanh(x/2) is the standard mapping from log-odds to correlation coefficient
-        strength = math.tanh(ant_node.log_odds / 2.0)
 
-        # Calculate impact
-        impact = propagation_rate * weight * strength
-        
-        updates[cons_name] = updates.get(cons_name, 0.0) + impact
+        # Compute how much this belief changed this turn
+        delta = node.log_odds - prev_val
 
-    # Apply updates
+        # If nothing changed, no propagation needed
+        if abs(delta) < 1e-9:
+            continue
+
+        # Propagate delta to all children via get_children()
+        for link in state.get_children(prop):
+            cons_name = link["consequent"]
+            weight = link.get("weight", 1.0)
+
+            impact = propagation_rate * weight * delta
+
+            updates[cons_name] = updates.get(cons_name, 0.0) + impact
+
+    # Apply accumulated updates
     for prop, delta in updates.items():
-        # Ensure the belief node exists; if not, create it (discovery/inference)
         node = state.get_belief(prop)
+        # double-check valid endpoints 
         if node is None:
-            # Create new latent belief with neutral prior
-            node = BeliefNode(proposition=prop, log_odds=0.0)
-            state.add_belief(node)
-            node.add_evidence("causal_inference")
-        
+            continue
         node.log_odds += delta
-        # Mark source if significant update
-        if abs(delta) > 0.1:
-            node.add_evidence(f"inference_from_graph")
 
-    # Ensure inferred beliefs are logically consistent
+        # Mark provenance if update is significant
+        if abs(delta) > 0.01:
+            node.add_evidence("causal_propagation")
+
+    # Ensure beliefs remain logically consistent
     resolve_belief_conflicts(state.beliefs)
+def snapshot_belief_log_odds(state: CharacterState) -> Dict[str, float]:
+    return {
+        prop: node.log_odds
+        for prop, node in state.beliefs.items()
+    }
 
