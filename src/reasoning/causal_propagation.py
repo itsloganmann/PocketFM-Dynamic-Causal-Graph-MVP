@@ -23,7 +23,6 @@ from reasoning.belief_update import resolve_belief_conflicts
 
 def propagate_causal_effects(
     state: CharacterState,
-    prev_log_odds: Optional[Dict[str, float]] = None,
     propagation_rate: float = 0.1
 ) -> None:
     """
@@ -32,6 +31,10 @@ def propagate_causal_effects(
     Iterates through the character's causal_links and updates the log-odds
     of consequent beliefs based on the strength of antecedent beliefs.
 
+    Mechanism:
+        For each causal link A -> B with weight w:
+        delta_L(B) = propagation_rate * w * tanh(L(A) / 2)
+
     Preconditions
     -------------
     state : CharacterState
@@ -39,11 +42,12 @@ def propagate_causal_effects(
 
     Procedure
     ---------
-    1. For each belief that has children in the causal graph:
-       a. Compute Δ = current log_odds - previous log_odds
-       b. For each child link with weight w:
-          child.log_odds += propagation_rate * w * Δ
-    2. Resolve any belief conflicts after all updates.
+    1. For each causal link:
+       a. Retrieve antecedent belief A and consequent belief B.
+       b. Compute impact = propagation_rate * weight * tanh(L(A) / 2).
+       c. Accumulate impacts for all consequents.
+    2. Apply impacts to belief log-odds.
+    3. Resolve any belief conflicts after all updates.
 
     Postconditions
     --------------
@@ -57,38 +61,32 @@ def propagate_causal_effects(
     """
     if not state.causal_links:
         return
-    if prev_log_odds is None:
-        return
+
     updates: Dict[str, float] = {}
 
-    # Iterate over all beliefs that might have changed
-    for prop, node in state.beliefs.items():
-        prev_val = prev_log_odds.get(prop)
-        if prev_val is None:
+    # Iterate over all causal links
+    for link in state.causal_links:
+        ant_name = link["antecedent"]
+        cons_name = link["consequent"]
+        weight = link.get("weight", 1.0)
+
+        ant_node = state.get_belief(ant_name)
+        if ant_node is None:
             continue
 
-        # Compute how much this belief changed this turn
-        delta = node.log_odds - prev_val
+        # Compute impact using tanh(L(A)/2)
+        # This reflects the strength of the belief A influencing B.
+        strength = math.tanh(ant_node.log_odds / 2.0)
+        impact = propagation_rate * weight * strength
 
-        # If nothing changed, no propagation needed
-        if abs(delta) < 1e-9:
-            continue
-
-        # Propagate delta to all children via get_children()
-        for link in state.get_children(prop):
-            cons_name = link["consequent"]
-            weight = link.get("weight", 1.0)
-
-            impact = propagation_rate * weight * delta
-
-            updates[cons_name] = updates.get(cons_name, 0.0) + impact
+        updates[cons_name] = updates.get(cons_name, 0.0) + impact
 
     # Apply accumulated updates
     for prop, delta in updates.items():
         node = state.get_belief(prop)
-        # double-check valid endpoints 
         if node is None:
             continue
+            
         node.log_odds += delta
 
         # Mark provenance if update is significant
