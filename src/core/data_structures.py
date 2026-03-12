@@ -705,8 +705,8 @@ class EventFrame:
         self.confidence: float = _validate_unit(confidence, "confidence")
         self.turn_index: int = int(turn_index)
         self.source_text: str = str(source_text)
+        self.polarities: Dict[str, int] = dict(polarities or {})
 
-    # -- query helpers used by belief update (Member 3) --------------------
 
     def asserts(self, proposition: str) -> bool:
         """True if this event explicitly asserts *proposition*."""
@@ -737,6 +737,21 @@ class EventFrame:
 
     def references_entity(self, entity_id: str) -> bool:
         return entity_id in self.entities
+        
+    def get_polarity(self, proposition: str) -> int:
+        """Return polarity for a proposition: +1 (asserts) or -1 (contradicts).
+        If not explicitly set, falls back to +1 for asserted props and
+        -1 for NOT_-prefixed props (saleena's)."""
+        p_norm = proposition.strip().lower()
+        # Check explicit polarity dict first
+        if p_norm in self.polarities:
+            return self.polarities[p_norm]
+        # Fallback: infer from NOT_ prefix convention
+        for p in self.propositions:
+            pn = p.strip().lower()
+            if pn == f"not_{p_norm}" or pn == f"~{p_norm}":
+                return -1
+        return 1
 
     # -- serialization -----------------------------------------------------
 
@@ -749,6 +764,7 @@ class EventFrame:
             "confidence": self.confidence,
             "turn_index": self.turn_index,
             "source_text": self.source_text,
+            "polarities": dict(self.polarities),
         }
 
     @classmethod
@@ -761,6 +777,7 @@ class EventFrame:
             confidence=d.get("confidence", 1.0),
             turn_index=d.get("turn_index", 0),
             source_text=d.get("source_text", ""),
+            polarities=d.get("polarities"),
         )
 
     def __repr__(self) -> str:
