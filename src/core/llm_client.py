@@ -13,7 +13,7 @@ import os
 import json
 import logging
 import requests
-from typing import Any, Dict, Optional, Type, TypeVar
+from typing import Any, Dict, Optional, Type, TypeVar, List
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +28,53 @@ HF_FREE_API_URL = "https://api-inference.huggingface.co/models/"
 
 # Track which backend is active
 _active_backend = None  # "gemini", "huggingface", or None
+
+# Embedding configuration
+
+
+def _get_gemini_embedding_model() -> str:
+    return os.getenv("GEMINI_EMBEDDING_MODEL", "models/embedding-002")
+
+
+
+
+def get_embedding_provider() -> Optional[str]:
+    """Return the active embedding provider name, if configured."""
+    return "gemini"
+
+
+def is_embedding_available(provider: Optional[str] = None) -> bool:
+    """Check if the configured embedding backend is ready to use."""
+    provider = provider or get_embedding_provider()
+    if provider == "gemini":
+        return get_api_key() is not None
+    return False
+
+
+def get_embedding(text: str, provider: Optional[str] = None) -> Optional[List[float]]:
+    """Fetch an embedding vector for the given text using the configured provider."""
+    provider = provider or get_embedding_provider()
+    if provider == "gemini":
+        api_key = get_api_key()
+        if not api_key:
+            return None
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)  # type: ignore[attr-defined, reportPrivateImportUsage]
+            response = genai.embed_content(  # type: ignore[attr-defined, reportPrivateImportUsage]
+                model=_get_gemini_embedding_model(),
+                content=text,
+            )
+            if isinstance(response, dict):
+                return response.get("embedding")
+            embedding = getattr(response, "embedding", None)
+            if embedding is not None:
+                return list(embedding)
+        except Exception as exc:
+            logger.warning(f"Gemini embedding failed: {exc}")
+        return None
+
+    return None
 
 def get_api_key() -> Optional[str]:
     """Retrieve the API key from environment variables."""

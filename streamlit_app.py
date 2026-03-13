@@ -97,6 +97,15 @@ def _apply_api_key() -> None:
     if st.session_state.gemini_api_key:
         os.environ["GEMINI_API_KEY"] = st.session_state.gemini_api_key
 
+    os.environ["EMBEDDING_PROVIDER"] = "gemini"
+
+    embedding_key = st.session_state.get("embedding_api_key", "")
+    if embedding_key:
+        os.environ["GEMINI_API_KEY"] = embedding_key
+    gemini_model = st.session_state.get("gemini_embedding_model", "")
+    if gemini_model:
+        os.environ["GEMINI_EMBEDDING_MODEL"] = gemini_model
+
 
 def _init_session():
     if "character" not in st.session_state:
@@ -109,6 +118,10 @@ def _init_session():
         st.session_state.history = []   # list of (user_msg, char_response)
     if "gemini_api_key" not in st.session_state:
         st.session_state.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+    if "embedding_api_key" not in st.session_state:
+        st.session_state.embedding_api_key = os.getenv("GEMINI_API_KEY", "")
+    if "gemini_embedding_model" not in st.session_state:
+        st.session_state.gemini_embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "models/embedding-002")
 
 
 _init_session()
@@ -139,6 +152,33 @@ with st.sidebar:
         st.success("LLM mode (Gemini API)")
     else:
         st.success("Smart rule-based mode (no API needed)")
+
+    st.divider()
+
+    st.subheader("Embedding Configuration")
+    st.caption("Using Gemini Embedding 2 for OOD matching.")
+
+    embedding_key_input = st.text_input(
+        "Gemini embedding API key",
+        value=st.session_state.embedding_api_key,
+        type="password",
+        help="Required for Gemini Embedding 2.",
+    )
+    if embedding_key_input != st.session_state.embedding_api_key:
+        st.session_state.embedding_api_key = embedding_key_input
+
+    with st.expander("Advanced embedding settings"):
+        gemini_model_input = st.text_input(
+            "Gemini embedding model",
+            value=st.session_state.gemini_embedding_model,
+            help="Defaults to models/embedding-002.",
+        )
+        if gemini_model_input != st.session_state.gemini_embedding_model:
+            st.session_state.gemini_embedding_model = gemini_model_input
+
+    st.caption(
+        "Embedding matching is used only when keyword rules miss a proposition."
+    )
 
     st.divider()
 

@@ -13,6 +13,9 @@ in tests and offline demos.
 import re
 import json
 import logging
+import math
+import os
+from functools import lru_cache
 from typing import Optional, List, Dict, Any
 
 from core.data_structures import EventFrame
@@ -31,6 +34,42 @@ _TONE_MAP = {
     "surprise": ["wow", "really", "unexpected", "surprise"],
     "anticipation": ["hope", "expect", "wait", "looking forward"]
 }
+
+# Embedding labels for OOD matching fallback
+_EMBEDDING_LABELS: dict[str, list[str]] = {
+    "castle_is_safe": [
+        "the castle is safe",
+        "the fortress is secure",
+        "the stronghold feels protected",
+    ],
+    "not_castle_is_safe": [
+        "the castle is unsafe",
+        "the fortress is dangerous",
+        "the stronghold is crumbling",
+    ],
+    "king_is_wise": [
+        "the king is wise",
+        "the ruler is intelligent",
+        "the monarch is trustworthy",
+    ],
+    "not_king_is_wise": [
+        "the king is foolish",
+        "the ruler is corrupt",
+        "the monarch is unwise",
+    ],
+    "forest_is_dangerous": [
+        "the forest is dangerous",
+        "the woods are unsafe",
+        "the woodland is threatening",
+    ],
+    "not_forest_is_dangerous": [
+        "the forest is safe",
+        "the woods feel calm",
+        "the woodland is peaceful",
+    ],
+}
+
+_EMBEDDING_THRESHOLD = float(os.getenv("EMBEDDING_MATCH_THRESHOLD", "0.35"))
 
 def _normalize_base_prop(prop: str) -> str:
     p = prop.strip().lower()
@@ -312,7 +351,13 @@ def _extract_event_rules(user_message: str) -> EventFrame:
     seen = set()
     propositions = [p for p in propositions if not (p in seen or seen.add(p))]
     
-    # If no semantic patterns matched, fall back to simple extraction
+    # If no semantic patterns matched, attempt embedding-based matching (OOD handling)
+    if not propositions:
+        embedding_props = _extract_event_embeddings(message)
+        if embedding_props:
+            propositions = embedding_props
+
+    # If still empty, fall back to simple extraction
     if not propositions:
         propositions = _extract_simple_propositions(message)
 
@@ -334,6 +379,50 @@ def _extract_event_rules(user_message: str) -> EventFrame:
         confidence=1.0 if propositions else 0.5,
         source_text=user_message
     )
+
+
+def _extract_event_embeddings(message: str) -> list[str]:
+    """Attempt to map OOD messages to canonical propositions via embeddings."""
+    if not llm_client.is_embedding_available():
+        return []
+
+    message_embedding = llm_client.get_embedding(message)
+    if not message_embedding:
+        return []
+
+    best_prop = None
+    best_score = -1.0
+    for prop, labels in _EMBEDDING_LABELS.items():
+        for label in labels:
+            label_embedding = _get_label_embedding(label)
+            if not label_embedding:
+                continue
+            score = _cosine_similarity(message_embedding, label_embedding)
+            if score > best_score:
+                best_score = score
+                best_prop = prop
+
+    if best_prop is None or best_score < _EMBEDDING_THRESHOLD:
+        return []
+    return [best_prop]
+
+
+def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
+    """Compute cosine similarity for two vectors."""
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return -1.0
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = math.sqrt(sum(a * a for a in vec_a))
+    norm_b = math.sqrt(sum(b * b for b in vec_b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return -1.0
+    return dot / (norm_a * norm_b)
+
+
+@lru_cache(maxsize=256)
+def _get_label_embedding(label: str) -> list[float] | None:
+    """Cache embeddings for label phrases."""
+    return llm_client.get_embedding(label)
 
 
 def validate_event(
