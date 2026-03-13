@@ -318,11 +318,13 @@ with left_col:
     st.markdown("Click a preset to send it as a message:")
     preset_cols = st.columns(2)
     presets = [
-        ("Castle is unsafe", "I heard the castle walls are crumbling and it's no longer safe!"),
-        ("King betrayed us", "The king has betrayed the entire kingdom - he's a liar!"),
-        ("Forest now safe", "Actually, the forest has been cleared; it's perfectly safe now."),
-        ("Ally is trustworthy", "I want you to know that your ally has proven completely trustworthy."),
-        ("Enemy approaching", "An enemy army is approaching - we must act fast!"),
+        ("Castle is unsafe", "I heard the castle walls are crumbling and it is no longer safe."),
+        ("Castle is safe", "The castle is safe and secure again."),
+        ("King betrayed us", "The king has betrayed the entire kingdom - he is a liar."),
+        ("King is wise", "The king is wise and just."),
+        ("Forest now safe", "Actually, the forest has been cleared; it is perfectly safe now."),
+        ("Ally is trustworthy", "Your ally has proven completely trustworthy."),
+        ("Enemy approaching", "An enemy army is approaching - we must act fast."),
         ("Peace declared", "The war is over; peace has been declared throughout the land."),
     ]
     for i, (label, text) in enumerate(presets):
