@@ -99,9 +99,6 @@ def _apply_api_key() -> None:
 
     os.environ["EMBEDDING_PROVIDER"] = "gemini"
 
-    embedding_key = st.session_state.get("embedding_api_key", "")
-    if embedding_key:
-        os.environ["GEMINI_API_KEY"] = embedding_key
     gemini_model = st.session_state.get("gemini_embedding_model", "")
     if gemini_model:
         os.environ["GEMINI_EMBEDDING_MODEL"] = gemini_model
@@ -118,10 +115,8 @@ def _init_session():
         st.session_state.history = []   # list of (user_msg, char_response)
     if "gemini_api_key" not in st.session_state:
         st.session_state.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
-    if "embedding_api_key" not in st.session_state:
-        st.session_state.embedding_api_key = os.getenv("GEMINI_API_KEY", "")
     if "gemini_embedding_model" not in st.session_state:
-        st.session_state.gemini_embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "models/embedding-002")
+        st.session_state.gemini_embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-2-preview")
 
 
 _init_session()
@@ -135,50 +130,36 @@ with st.sidebar:
 
     # API Key
     st.subheader("LLM Configuration")
-    st.markdown("**All features work without an API key.**")
+    st.markdown("**Gemini API Key Required**")
     
-    with st.expander("Optional: Add Gemini API Key for enhanced responses"):
-        api_key_input = st.text_input(
-            "GEMINI_API_KEY",
-            value=st.session_state.gemini_api_key,
-            type="password",
-            help="Enter your Google Gemini API key for LLM-powered responses. "
-                 "Leave blank to use the built-in intelligent response system.",
-        )
-        if api_key_input != st.session_state.gemini_api_key:
-            st.session_state.gemini_api_key = api_key_input
+    api_key_input = st.text_input(
+        "GEMINI_API_KEY",
+        value=st.session_state.gemini_api_key,
+        type="password",
+        help="Enter your Google Gemini API key to use Gemini Embeddings 2.",
+    )
+    if api_key_input != st.session_state.gemini_api_key:
+        st.session_state.gemini_api_key = api_key_input
+        st.rerun()
 
     if st.session_state.gemini_api_key:
-        st.success("LLM mode (Gemini API)")
+        st.success("API Key configured.")
     else:
-        st.success("Smart rule-based mode (no API needed)")
+        st.error("API Key required to run simulations.")
 
     st.divider()
 
     st.subheader("Embedding Configuration")
-    st.caption("Using Gemini Embedding 2 for OOD matching.")
-
-    embedding_key_input = st.text_input(
-        "Gemini embedding API key",
-        value=st.session_state.embedding_api_key,
-        type="password",
-        help="Required for Gemini Embedding 2.",
-    )
-    if embedding_key_input != st.session_state.embedding_api_key:
-        st.session_state.embedding_api_key = embedding_key_input
+    st.caption("Using Gemini Embedding 2 for extraction.")
 
     with st.expander("Advanced embedding settings"):
         gemini_model_input = st.text_input(
             "Gemini embedding model",
             value=st.session_state.gemini_embedding_model,
-            help="Defaults to models/embedding-002.",
+            help="Defaults to models/gemini-embedding-2-preview.",
         )
         if gemini_model_input != st.session_state.gemini_embedding_model:
             st.session_state.gemini_embedding_model = gemini_model_input
-
-    st.caption(
-        "Embedding matching is used only when keyword rules miss a proposition."
-    )
 
     st.divider()
 
@@ -328,10 +309,14 @@ with left_col:
             "Your message",
             placeholder="E.g. 'The king has betrayed the castle!'",
             label_visibility="collapsed",
+            disabled=not bool(st.session_state.gemini_api_key)
         )
         send_col, clear_col = st.columns([4, 1])
-        submitted = send_col.form_submit_button("Send ➤", use_container_width=True)
+        submitted = send_col.form_submit_button("Send ➤", use_container_width=True, disabled=not bool(st.session_state.gemini_api_key))
         cleared = clear_col.form_submit_button("Clear", use_container_width=True)
+
+    if not st.session_state.gemini_api_key:
+        st.warning("Please configure your Gemini API Key in the sidebar to interact.")
 
     if cleared:
         st.session_state.history = []
