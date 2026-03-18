@@ -273,8 +273,7 @@ with st.sidebar:
 st.title("Dynamic Causal Character Graphs")
 st.markdown(
     "An interactive demo of the **Dynamic Causal Character Graph (DCCG)** system - "
-    "belief revision, causal propagation, and conditioned dialogue generation. "
-    "**All features work instantly - no API keys required.**"
+    "belief revision, causal propagation, and conditioned dialogue generation."
 )
 st.caption(f"Deployed version: `{_get_commit_label()}`")
 st.caption(

@@ -14,8 +14,7 @@ A lightweight structured-state framework for persistent fictional agents in long
 - Scenario checklist: `docs/scenarios.md`
 - Grounded context and assumptions: `docs/context.md`
 
-### No API Key Required
-
+### Gemini API Key Required
 - **Belief revision** - log-odds updates as you chat
 - **Causal propagation** - A to B belief graph updates in real time
 - **Emotional state** - valence and arousal bars update after each turn
@@ -24,8 +23,7 @@ A lightweight structured-state framework for persistent fictional agents in long
 - **Scenario presets** - one-click narrative events
 - **Save, load, download** - persist and restore the full simulation state
 
-> **Optional**: Add a Gemini API key for enhanced LLM-powered responses
-
+> **Required**: A Gemini API key must be provided to use Gemini Embeddings 2 for narrative extraction.
 ## Overview
 
 Large language models lack an explicit representation of persistent psychological state, causing personality drift and motivational inconsistency in extended interactions. This project implements Dynamic Causal Character Graphs (DCCGs), a structured causal framework that models a character's core traits, beliefs, and world constraints as a directed acyclic graph.
@@ -120,8 +118,7 @@ Then open `http://localhost:8501` in your browser.
 5. **Set a custom subdomain** (e.g., `causal-character-graphs`) in Advanced settings for a clean URL.
 6. Click **Deploy** - your app will be live at a permanent `*.streamlit.app` URL within minutes.
 
-> **Note**: No API keys or secrets are required. All features work out of the box!
-
+> **Note**: A Gemini API key is required to use the embedding-based extraction engine.
 ## Running Tests
 
 ```bash
